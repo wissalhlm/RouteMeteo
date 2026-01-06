@@ -1,296 +1,174 @@
-/**
- * Écran RouteWeatherScreen
- * Membre 3 - Affichage de la météo sur le trajet
- */
-
+// src/screens/RouteWeatherScreen.js
 import React, { useState, useEffect } from 'react';
-import {
-  View,
-  Text,
-  ScrollView,
-  ActivityIndicator,
-  StyleSheet,
-  RefreshControl,
-  Alert,
-} from 'react-native';
+import { View, ScrollView, ActivityIndicator, StyleSheet, Text, TouchableOpacity, Alert } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage'; 
+import MapView, { Marker, Polyline } from 'react-native-maps';
 import WeatherStepCard from '../components/WeatherStepCard';
-import { getWeatherForRoute } from '../services/weatherApi';
+import { getWeatherForRoute } from '../services/weatherService';
+import { saveRoute } from '../services/storage';
+import { Ionicons } from '@expo/vector-icons'; // Ajout de l'import
 
-/**
- * Écran principal pour afficher la météo du trajet
- * @param {Object} route - Paramètres de navigation
- * @param {Object} navigation - Navigation
- */
-const RouteWeatherScreen = ({ route, navigation }) => {
-  // État local
+const RouteWeatherScreen = ({ route }) => {
   const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
   const [weatherData, setWeatherData] = useState([]);
-  const [error, setError] = useState(null);
+  const [unitSymbol, setUnitSymbol] = useState('°C'); // État pour l'affichage du symbole
+  const { routePoints = [], departureName, destinationName, departureDate } = route.params || {};
 
-  // Récupération des paramètres de la route
-  // Ces données seront fournies par le Membre 2 (points intermédiaires)
-  const {
-    routePoints = [],      // [{lat, lon, name}]
-    departureDate = new Date(),
-    departureName = 'Départ',
-    destinationName = 'Arrivée',
-    units = 'metric',
-  } = route.params || {};
+  // Fonction pour formater la date
+  const formatDate = (dateString) => {
+    const date = new Date(dateString);
+    return date.toLocaleDateString('fr-FR', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  };
 
-  /**
-   * Charger la météo pour tous les points
-   */
-  const loadWeatherData = async () => {
-    try {
-      setError(null);
-
-      // Vérifier qu'on a bien des points
-      if (!routePoints || routePoints.length === 0) {
-        throw new Error('Aucun point de trajet fourni');
-      }
-
-      // Appeler l'API météo pour tous les points
-      const weatherResults = await getWeatherForRoute(
-        routePoints,
-        departureDate,
-        units
-      );
-
-      // Ajouter les noms des étapes
-      const formattedData = weatherResults.map((point, index) => {
-        let stepName;
+  useEffect(() => {
+    const loadData = async () => {
+      try {
+        // 1. Récupérer l'unité choisie dans les paramètres (C ou F)
+        const storedUnit = await AsyncStorage.getItem('unit');
+        const isFahrenheit = storedUnit === 'F';
         
-        if (index === 0) {
-          stepName = 'Départ';
-        } else if (index === weatherResults.length - 1) {
-          stepName = 'Arrivée';
-        } else {
-          const percentage = Math.round((index / (weatherResults.length - 1)) * 100);
-          stepName = `${percentage}% du trajet`;
-        }
+        // Déterminer l'unité pour l'API et le symbole pour l'affichage
+        const apiUnit = isFahrenheit ? 'imperial' : 'metric';
+        setUnitSymbol(isFahrenheit ? '°F' : '°C');
 
-        return {
-          ...point,
-          stepName,
-          cityName: point.name || `Point ${index + 1}`,
-        };
-      });
+        const pointsForWeather = routePoints.map(p => ({ 
+          lat: parseFloat(p.latitude || p.lat), 
+          lon: parseFloat(p.longitude || p.lon), 
+          name: p.name 
+        }));
 
-      setWeatherData(formattedData);
-    } catch (err) {
-      console.error('Erreur lors du chargement de la météo:', err);
-      setError(err.message || 'Une erreur est survenue');
-      
-      // Afficher une alerte à l'utilisateur
-      Alert.alert(
-        'Erreur',
-        'Impossible de charger la météo. Vérifiez votre connexion internet et votre clé API.',
-        [{ text: 'OK' }]
-      );
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
+        // 2. Passer l'unité (metric/imperial) à l'API météo
+        const results = await getWeatherForRoute(pointsForWeather, new Date(departureDate), apiUnit);
+        setWeatherData(results);
+      } catch (err) {
+        console.error("Erreur lors du chargement des données :", err);
+      } finally {
+        setLoading(false);
+      }
+    };
+    loadData();
+  }, [routePoints, departureDate]);
+
+  const handleSave = async () => {
+    try {
+      const newRoute = {
+        id: Date.now().toString(),
+        depart: departureName,
+        arrivee: destinationName,
+        date: new Date(departureDate).toLocaleDateString('fr-FR'),
+      };
+      await saveRoute(newRoute);
+      Alert.alert("Succès", "Trajet enregistré dans vos favoris !");
+    } catch (e) {
+      Alert.alert("Erreur", "Impossible d'enregistrer le trajet.");
     }
   };
 
-  /**
-   * Rafraîchir les données
-   */
-  const onRefresh = () => {
-    setRefreshing(true);
-    loadWeatherData();
-  };
+  if (loading) return <ActivityIndicator size="large" style={styles.center} color="#2ecc71" />;
 
-  /**
-   * Chargement initial
-   */
-  useEffect(() => {
-    loadWeatherData();
-  }, []);
-
-  /**
-   * Affichage pendant le chargement
-   */
-  if (loading) {
-    return (
-      <View style={styles.centerContainer}>
-        <ActivityIndicator size="large" color="#2196F3" />
-        <Text style={styles.loadingText}>Chargement de la météo...</Text>
-        <Text style={styles.loadingSubtext}>Récupération des données pour {routePoints.length} points</Text>
-      </View>
-    );
-  }
-
-  /**
-   * Affichage en cas d'erreur
-   */
-  if (error && weatherData.length === 0) {
-    return (
-      <View style={styles.centerContainer}>
-        <Text style={styles.errorIcon}>⚠️</Text>
-        <Text style={styles.errorTitle}>Erreur</Text>
-        <Text style={styles.errorMessage}>{error}</Text>
-        <Text style={styles.errorHint}>
-          Vérifiez que vous avez bien configuré votre clé API OpenWeatherMap
-        </Text>
-      </View>
-    );
-  }
-
-  /**
-   * Affichage principal
-   */
   return (
     <View style={styles.container}>
-      {/* En-tête avec résumé du trajet */}
-      <View style={styles.header}>
-        <Text style={styles.headerTitle}>Météo du trajet</Text>
-        <Text style={styles.headerSubtitle}>
-          {departureName} → {destinationName}
-        </Text>
-        <Text style={styles.headerDate}>
-          Départ : {departureDate.toLocaleDateString('fr-FR', {
-            weekday: 'long',
-            day: 'numeric',
-            month: 'long',
-            hour: '2-digit',
-            minute: '2-digit',
-          })}
-        </Text>
-      </View>
-
-      {/* Liste des étapes météo */}
-      <ScrollView
-        style={styles.scrollView}
-        contentContainerStyle={styles.scrollContent}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={onRefresh}
-            colors={['#2196F3']}
-          />
-        }
+      <MapView
+        style={styles.map}
+        initialRegion={{
+          latitude: routePoints[0]?.lat || routePoints[0]?.latitude || 33.57,
+          longitude: routePoints[0]?.lon || routePoints[0]?.longitude || -7.58,
+          latitudeDelta: 2,
+          longitudeDelta: 2,
+        }}
       >
-        {weatherData.map((step, index) => (
-          <WeatherStepCard
-            key={`step-${index}`}
-            stepName={step.stepName}
-            cityName={step.cityName}
-            weather={step.weather}
-            estimatedTime={step.estimatedTime}
-            isFirst={index === 0}
-            isLast={index === weatherData.length - 1}
+        {routePoints.map((p, i) => (
+          <Marker 
+            key={i} 
+            coordinate={{ latitude: p.lat || p.latitude, longitude: p.lon || p.longitude }} 
+            title={p.name} 
+            pinColor={p.type === 'Départ' ? 'green' : p.type === 'Arrivée' ? 'red' : 'blue'} 
           />
         ))}
-
-        {/* Message de fin */}
-        <View style={styles.footer}>
-          <Text style={styles.footerText}>
-            ✅ {weatherData.length} étapes analysées
-          </Text>
-          <Text style={styles.footerHint}>
-            Tirez vers le bas pour actualiser
-          </Text>
+        <Polyline 
+          coordinates={routePoints.map(p => ({ latitude: p.lat || p.latitude, longitude: p.lon || p.longitude }))} 
+          strokeWidth={3} 
+          strokeColor="#3498db" 
+        />
+      </MapView>
+      
+      <ScrollView style={styles.list}>
+        <View style={styles.header}>
+          <View style={styles.routeInfo}>
+            <Text style={styles.title}>{departureName} ➜ {destinationName}</Text>
+            <Text style={styles.routeDate}>
+              <Ionicons name="calendar-outline" size={14} /> {formatDate(departureDate)}
+            </Text>
+          </View>
+          <TouchableOpacity style={styles.saveBtn} onPress={handleSave}>
+            <Ionicons name="bookmark-outline" size={20} color="#fff" />
+            <Text style={styles.saveBtnText}>Enregistrer</Text>
+          </TouchableOpacity>
         </View>
+
+        {weatherData.map((step, index) => (
+          <WeatherStepCard
+            key={index}
+            stepName={step.type}
+            cityName={step.name}
+            weather={step.weather}
+            type={step.type}
+            unitSymbol={unitSymbol} // Transmission du symbole au composant enfant
+          />
+        ))}
       </ScrollView>
     </View>
   );
 };
 
 const styles = StyleSheet.create({
-  container: {
+  container: { flex: 1, backgroundColor: '#f5f5f5' },
+  center: { flex: 1, justifyContent: 'center' },
+  map: { height: '35%' },
+  list: { flex: 1 },
+  header: { 
+    padding: 15, 
+    backgroundColor: '#fff', 
+    flexDirection: 'row', 
+    justifyContent: 'space-between', 
+    alignItems: 'center', 
+    borderBottomWidth: 1, 
+    borderBottomColor: '#eee' 
+  },
+  routeInfo: {
     flex: 1,
-    backgroundColor: '#F5F5F5',
   },
-  centerContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#F5F5F5',
-    padding: 20,
+  title: { 
+    fontSize: 16, 
+    fontWeight: 'bold', 
+    color: '#333', 
+    marginBottom: 4 
   },
-  loadingText: {
-    marginTop: 16,
-    fontSize: 16,
-    color: '#333',
-    fontWeight: '600',
-  },
-  loadingSubtext: {
-    marginTop: 8,
-    fontSize: 14,
-    color: '#999',
-  },
-  errorIcon: {
-    fontSize: 64,
-    marginBottom: 16,
-  },
-  errorTitle: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#333',
-    marginBottom: 8,
-  },
-  errorMessage: {
-    fontSize: 16,
-    color: '#666',
-    textAlign: 'center',
-    marginBottom: 16,
-  },
-  errorHint: {
-    fontSize: 12,
-    color: '#999',
-    textAlign: 'center',
-    fontStyle: 'italic',
-  },
-  header: {
-    backgroundColor: '#FFFFFF',
-    padding: 20,
-    borderBottomWidth: 1,
-    borderBottomColor: '#E0E0E0',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  headerTitle: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#333',
-    marginBottom: 4,
-  },
-  headerSubtitle: {
-    fontSize: 16,
-    color: '#2196F3',
-    fontWeight: '600',
-    marginBottom: 8,
-  },
-  headerDate: {
+  routeDate: {
     fontSize: 14,
     color: '#666',
-  },
-  scrollView: {
-    flex: 1,
-  },
-  scrollContent: {
-    paddingVertical: 16,
-  },
-  footer: {
+    flexDirection: 'row',
     alignItems: 'center',
-    padding: 24,
-    marginTop: 8,
   },
-  footerText: {
-    fontSize: 14,
-    color: '#4CAF50',
-    fontWeight: '600',
-    marginBottom: 8,
+  saveBtn: { 
+    backgroundColor: '#3498db', 
+    paddingHorizontal: 12,
+    paddingVertical: 8, 
+    borderRadius: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
   },
-  footerHint: {
+  saveBtnText: { 
+    color: '#fff', 
+    fontWeight: 'bold', 
     fontSize: 12,
-    color: '#999',
-    fontStyle: 'italic',
+    marginLeft: 6,
   },
 });
 
